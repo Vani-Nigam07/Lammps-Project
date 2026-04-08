@@ -1,0 +1,7 @@
+LAMMPS (7 Feb 2024 - Update 1)
+OMP_NUM_THREADS environment is not set. Defaulting to 1 thread. (src/comm.cpp:98)
+  using 1 OpenMP thread(s) per MPI task
+Custom pore — removed 36 filter atoms, 644 remaining (type2)
+WARNING: Detected non-ASCII characters in input. Will try to continue by replacing with ASCII equivalents where known. (src/input.cpp:478)
+ERROR: Unknown command: Custom pore — removed 36 filter atoms, 644 remaining (type2) (src/input.cpp:314)
+Last command: Custom pore — removed 36 filter atoms, 644 remaining (type2)

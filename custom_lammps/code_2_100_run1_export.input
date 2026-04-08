@@ -1,0 +1,82 @@
+echo screen
+units         real
+dimension     3
+boundary      p p p
+atom_style    full
+neigh_modify delay 0 every 1 check yes exclude type 1 1 exclude type 2 2
+processors    * * *
+
+variable timecoef equal 1.0
+variable T equal 300.00
+variable thermo_itv equal 1.0
+variable dump_itv equal 1.0
+variable dumpvel_itv equal 1.0
+variable equi_steps equal 1000
+variable flow_stepsA equal 1000000
+variable seed equal 2021
+variable c_low equal 93.0
+variable c_high equal 96.5
+
+read_data     code_2.lammps
+
+# group definitions
+group           gra type 1                # piston at z=12.5
+group           PORE type 2               # filter membrane at z=96.5
+group           fluidmols type 3 4
+group           Potassium type 5
+group           Chloride type 6
+group           mixfluids type 3 4 5 6
+group           oxygen type 3
+group           gra1 id 1:680
+group           gra2 id 14631:15274
+
+# force fields
+variable        rcF equal 12.0
+pair_style      lj/cut/coul/long  ${rcF} ${rcF}
+pair_coeff      1 1  0.06919 3.390                  #gra (piston)
+pair_coeff      2 2  0.06919 3.390                  #PORE (filter)
+pair_coeff      3 3  0.15539 3.1656                 #O
+pair_coeff      4 4  0.0000  0.0000                 #H
+pair_coeff      5 5  0.4297  2.8384                 #K+
+pair_coeff      6 6  0.01279 4.8305                 #Cl-
+pair_modify     mix arithmetic
+
+kspace_style    pppm 1e-05
+dielectric      1.0
+bond_style      harmonic
+bond_coeff      1 450.0 1.0
+angle_style     harmonic
+angle_coeff     1 100.0 109.47
+
+fix 20 PORE setforce 0.0 0.0 0.0
+fix 9 gra setforce 0.0 0.0 0.0
+min_style       cg
+minimize        1.0e-4 1.0e-4 1000 1000
+
+reset_timestep 0
+timestep 1
+compute fluidtemp mixfluids temp
+velocity  mixfluids create ${T} ${seed} dist gaussian temp fluidtemp mom yes rot yes units box
+velocity  PORE set 0.0 0.0 0.0 units box
+fix 3 fluidmols shake 0.0001 20 0 b 1 a 1
+velocity gra set 0.0 0.0 NULL units box
+fix 18 gra rigid single force * off off on torque * off off off
+fix 12 fluidmols npt temp 300 300 100.0 iso 1.0 1.0 100.0
+run 5000
+unfix 12
+unfix 9
+
+reset_timestep 0
+timestep 1
+fix 22 gra setforce 0.0 0.0 NULL
+fix 2 fluidmols nvt temp 300 300 100
+fix 15 Potassium nvt temp 300 300 100
+fix 16 Chloride nvt temp 300 300 100
+
+fix kick gra addforce 0.0 0.0 0.03386           #100 MPa
+
+dump 1 all custom 5000 code_2_100_1.lammpstrj id mol type x y z
+
+thermo 500
+thermo_style custom step lx ly lz press c_fluidtemp ke evdwl ecoul elong pe
+run 10000000 #10ns
