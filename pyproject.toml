@@ -5,18 +5,20 @@ description = "autoMD"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "altair<5",
+    "altair==5.5.0",
     "anthropic>=0.86.0",
+    "ase[test]>=3.28.0",
     "fastmcp>=3.2.0",
     "google-generativeai>=0.8.6",
     "mcp[cli]>=1.26.0",
-    "pandas>=2.3.3",
-    "plotly>=6.6.0",
+    "mdanalysis>=2.9.0",
+    "pandas==2.3.2",
+    "plotly==6.3.1",
     "plotly-express>=0.4.1",
     "px>=0.2.2",
     "pytest>=7.4.0",
     "setuptools>=82.0.1",
-    "streamlit==1.35.0",
+    "streamlit==1.49.1",
     "streamlit-plotly-events>=0.0.6",
 ]
 

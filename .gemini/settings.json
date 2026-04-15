@@ -1,0 +1,36 @@
+{
+  "ide": {
+    "hasSeenNudge": true
+  },
+  "security": {
+    "auth": {
+      "selectedType": "oauth-personal"
+    }
+  },
+  "mcpServers": {
+    "autoMD": {
+      "command": "/home/vani/.local/bin/uv",
+      "args": [
+        "--directory",
+        "/media/vani/ebc68877-0047-41f0-9256-3014e42ef8e1/vani/lammps/mcp_implement",
+        "run",
+        "mcp",
+        "run",
+        "main.py"
+      ]
+    },
+
+  "lammps_server": {
+    "command": "/home/vani/.local/bin/uv",
+    "args": [
+      "--directory",
+      "/media/vani/ebc68877-0047-41f0-9256-3014e42ef8e1/vani/lammps/mcp_implement/run_lammps",
+      "run",
+      "mcp",
+      "run",
+      "main.py"
+    ]
+  }
+}
+  
+}

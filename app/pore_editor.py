@@ -16,6 +16,7 @@ import os
 import sys
 from pathlib import Path
 import json
+import logging
 from streamlit_plotly_events import plotly_events
 
 # Allow running this file directly (e.g., `python pore_editor.py` or `streamlit run`)
@@ -33,6 +34,26 @@ from mcp_implement.lammps_tools import (
 )
 
 # ── Streamlit App ────────────────────────────────────────────────────
+
+LOG_PATH = _repo_root / "mcp_implement" / "custom_lammps" / "streamlit.log"
+
+
+def _get_logger() -> logging.Logger:
+    if not st.session_state.get("_log_ready"):
+        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(message)s",
+            handlers=[logging.FileHandler(LOG_PATH), logging.StreamHandler()],
+        )
+        st.session_state._log_ready = True
+    return logging.getLogger("pore_editor")
+
+
+@st.cache_data(show_spinner="Parsing data...")
+def _load_parsed(path: str, mtime: float) -> dict:
+    raw = parse_lammps_data(path)
+    return reconstruct_full_filter(raw)
 
 
 def _extract_selected_ids(event) -> set:
@@ -135,6 +156,8 @@ def _write_export_outputs(
 
 st.set_page_config(page_title="Graphene Pore Editor", layout="wide")
 st.title("Graphene Pore Editor")
+logger = _get_logger()
+logger.info("run_start")
 
 # Sidebar: file selection
 pore_dir = os.path.dirname(os.path.abspath(__file__))
@@ -163,11 +186,13 @@ else:
 
     # Parse
     if 'parsed' not in st.session_state or st.session_state.get('_loaded_file') != selected_file:
-        raw_data = parse_lammps_data(filepath)
-        st.session_state.parsed = reconstruct_full_filter(raw_data)
+        mtime = os.path.getmtime(filepath)
+        cached = _load_parsed(filepath, mtime)
+        st.session_state.parsed = copy.deepcopy(cached)
         st.session_state._loaded_file = selected_file
         st.session_state.deleted_ids = set()
         st.session_state.run_id = 1
+        logger.info("loaded_file=%s", selected_file)
     
     data = st.session_state.parsed
 
@@ -213,6 +238,7 @@ else:
     if tool_mode == "Clear all":
         st.session_state.deleted_ids = set()
         st.sidebar.success("Selection cleared.")
+        logger.info("selection_cleared file=%s", selected_file)
 
     brush_radius = None
     if tool_mode == "Circle brush":
@@ -316,6 +342,11 @@ else:
             st.session_state.deleted_ids -= newly_selected
         else:
             st.session_state.deleted_ids |= newly_selected
+        logger.info(
+            "selection_toggled count=%s file=%s",
+            len(st.session_state.deleted_ids),
+            selected_file,
+        )
         st.rerun()
 
     # ── Circle brush via coordinate input ──
@@ -329,6 +360,7 @@ else:
                 if dist <= brush_radius:
                     st.session_state.deleted_ids.add(a['id'])
             st.write(f"DEBUG: deleted_ids = {len(st.session_state.get('deleted_ids', set()))}")
+            logger.info("circle_brush count=%s file=%s", len(st.session_state.deleted_ids), selected_file)
             st.rerun()
 
     if tool_mode == "Rectangle brush":
@@ -342,6 +374,7 @@ else:
                 if rx_lo <= a['x'] <= rx_hi and ry_lo <= a['y'] <= ry_hi:
                     st.session_state.deleted_ids.add(a['id'])
             st.write(f"DEBUG: deleted_ids = {len(st.session_state.get('deleted_ids', set()))}")
+            logger.info("rectangle_brush count=%s file=%s", len(st.session_state.deleted_ids), selected_file)
             st.rerun()
 
     
@@ -365,6 +398,14 @@ else:
             st.session_state.deleted_ids,
         )
         st.session_state.run_id += 1
+        logger.info(
+            "exported data=%s input=%s pressure=%s run_id=%s deleted=%s",
+            out_data_path,
+            out_input_path,
+            pressure,
+            st.session_state.run_id - 1,
+            len(st.session_state.deleted_ids),
+        )
         n_filter_new = len([a for a in new_data['atoms'] if a['type'] == 2])
 
         st.success(

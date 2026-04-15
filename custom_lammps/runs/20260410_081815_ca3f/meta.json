@@ -1,0 +1,10 @@
+{
+  "job_id": "20260410_081815_ca3f",
+  "created_at": "2026-04-10T08:18:15",
+  "command": "mpirun --bind-to core -np 8 /media/vani/ebc68877-0047-41f0-9256-3014e42ef8e1/vani/lammps_build/lammps-22Jul2025/build/lmp -in trial1_150_1.input",
+  "run_dir": "/media/vani/ebc68877-0047-41f0-9256-3014e42ef8e1/vani/lammps/mcp_implement/custom_lammps/runs/20260410_081815_ca3f",
+  "stdout_log": "/media/vani/ebc68877-0047-41f0-9256-3014e42ef8e1/vani/lammps/mcp_implement/custom_lammps/runs/20260410_081815_ca3f/stdout.log",
+  "stderr_log": "/media/vani/ebc68877-0047-41f0-9256-3014e42ef8e1/vani/lammps/mcp_implement/custom_lammps/runs/20260410_081815_ca3f/stderr.log",
+  "done_json": "/media/vani/ebc68877-0047-41f0-9256-3014e42ef8e1/vani/lammps/mcp_implement/custom_lammps/runs/20260410_081815_ca3f/done.json",
+  "pid": 2532002
+}

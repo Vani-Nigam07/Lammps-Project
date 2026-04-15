@@ -1,0 +1,8 @@
+{
+  "job_id": "20260411_123456_6598",
+  "returncode": 1,
+  "success": false,
+  "finished_at": "2026-04-11T12:34:56",
+  "command": "mpirun --bind-to core -np 16 /media/vani/ebc68877-0047-41f0-9256-3014e42ef8e1/vani/lammps_build/lammps-22Jul2025/build/lmp -in trial_2_MoS2_120_1.input",
+  "run_dir": "/media/vani/ebc68877-0047-41f0-9256-3014e42ef8e1/vani/lammps/mcp_implement/custom_lammps/runs/20260411_123456_6598"
+}

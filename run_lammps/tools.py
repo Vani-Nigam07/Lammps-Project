@@ -52,7 +52,7 @@ def build_lammps_command(input_file: str, hw: dict, mode: str = "auto") -> List[
             input_file,
         ]
     if mode == "mpi" or (mode == "auto" and hw["cores"] > 2):
-        n = max(1, hw["cores"] // 2)
+        n = max(1, hw["cores"])
         return ["mpirun", "--bind-to", "core", "-np", str(n), lmp, "-in", input_file]
     raise Exception("Serial mode is not supported. Please use 'mpi' or 'gpu' mode.")
 

@@ -10,6 +10,7 @@ import socket
 import json
 import threading
 import time
+import base64
 from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -51,12 +52,20 @@ server = FastMCP(
 _streamlit_proc: Optional[subprocess.Popen] = None
 _streamlit_stderr_tail: deque[str] = deque(maxlen=20)
 _streamlit_stderr_thread: Optional[threading.Thread] = None
+_streamlit_port: Optional[int] = None
+_streamlit_started_at: Optional[float] = None
+
+_streamlit_v2_proc: Optional[subprocess.Popen] = None
+_streamlit_v2_stderr_tail: deque[str] = deque(maxlen=20)
+_streamlit_v2_stderr_thread: Optional[threading.Thread] = None
+_streamlit_v2_port: Optional[int] = None
+_streamlit_v2_started_at: Optional[float] = None
 
 
-def _read_streamlit_stderr(pipe: Any) -> None:
+def _read_streamlit_stderr(pipe: Any, tail: deque[str]) -> None:
     try:
         for line in pipe:
-            _streamlit_stderr_tail.append(line.rstrip("\n"))
+            tail.append(line.rstrip("\n"))
     finally:
         try:
             pipe.close()
@@ -64,7 +73,12 @@ def _read_streamlit_stderr(pipe: Any) -> None:
             pass
 
 
-def _wait_for_port(host: str, port: int, timeout_s: float = 8.0) -> bool:
+def _wait_for_port(
+    host: str,
+    port: int,
+    timeout_s: float = 8.0,
+    stderr_tail: Optional[deque[str]] = None,
+) -> bool:
     deadline = time.time() + timeout_s
     last_err: Optional[Exception] = None
     while time.time() < deadline:
@@ -75,8 +89,83 @@ def _wait_for_port(host: str, port: int, timeout_s: float = 8.0) -> bool:
             last_err = exc
             time.sleep(0.2)
     if last_err:
-        _streamlit_stderr_tail.append(f"[healthcheck] {last_err}")
+        tail = stderr_tail if stderr_tail is not None else _streamlit_stderr_tail
+        tail.append(f"[healthcheck] {last_err}")
     return False
+
+
+def _port_available(address: str, port: int) -> bool:
+    bind_host = "127.0.0.1" if address == "localhost" else address
+    family = socket.AF_INET6 if ":" in bind_host else socket.AF_INET
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((bind_host, port))
+        return True
+    except Exception:
+        return False
+
+
+def _pick_port(address: str, preferred: int) -> int:
+    if _port_available(address, preferred):
+        return preferred
+    for offset in range(1, 20):
+        port = preferred + offset
+        if _port_available(address, port):
+            return port
+    raise RuntimeError(f"no free port near {preferred}")
+
+
+def _display_host(address: str) -> str:
+    external_host = os.getenv("STREAMLIT_EXTERNAL_HOST")
+    if external_host:
+        return external_host
+    return "localhost" if address in {"0.0.0.0", "::"} else address
+
+
+def _healthcheck_host(address: str) -> str:
+    if address == "0.0.0.0":
+        return "127.0.0.1"
+    if address == "::":
+        return "::1"
+    if address == "localhost":
+        return "127.0.0.1"
+    return address
+
+
+def _launch_streamlit_process(
+    app_path: Path,
+    address: str,
+    preferred_port: int,
+    stderr_tail: deque[str],
+) -> tuple[subprocess.Popen, int, Optional[threading.Thread]]:
+    port = _pick_port(address, preferred_port)
+    cmd = [
+        "streamlit",
+        "run",
+        str(app_path),
+        "--server.port",
+        str(port),
+        "--server.address",
+        address,
+    ]
+    stderr_tail.clear()
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(app_path.parents[2]),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    thread = None
+    if proc.stderr is not None:
+        thread = threading.Thread(
+            target=_read_streamlit_stderr,
+            args=(proc.stderr, stderr_tail),
+            daemon=True,
+        )
+        thread.start()
+    return proc, port, thread
 
 
 def _ensure_workdir() -> str:
@@ -216,62 +305,154 @@ def parse_thermo_tool() -> Dict[str, Any]:
 @server.tool(name="launch_streamlit_app")
 def launch_streamlit_app() -> Dict[str, Any]:
     """Launch the Streamlit pore editor app via a fixed command and path."""
-    global _streamlit_proc
+    global _streamlit_proc, _streamlit_port, _streamlit_stderr_thread, _streamlit_started_at
     try:
-        port = int(os.getenv("STREAMLIT_SERVER_PORT", "8501"))
+        preferred_port = int(os.getenv("STREAMLIT_SERVER_PORT", "8501"))
         address = os.getenv("STREAMLIT_SERVER_ADDRESS", "localhost")
-        display_host = "localhost" if address in {"0.0.0.0", "::"} else address
-        url = f"http://{display_host}:{port}"
+        display_host = _display_host(address)
 
         if _streamlit_proc and _streamlit_proc.poll() is None:
-            return {"status": "already_running", "pid": _streamlit_proc.pid, "url": url}
+            port = _streamlit_port or preferred_port
+            url = f"http://{display_host}:{port}"
+            return {"status": "already_running", "pid": _streamlit_proc.pid, "url": url, "port": port}
 
         repo_root = Path(__file__).resolve().parents[1]
-        app_path = repo_root / "mcp_implement" / "script_generation" / "pore_editor.py"
-        cmd = [
-            "streamlit",
-            "run",
-            str(app_path),
-            "--server.port",
-            str(port),
-            "--server.address",
-            address,
-        ]
-        _streamlit_stderr_tail.clear()
-        _streamlit_proc = subprocess.Popen(
-            cmd,
-            cwd=str(repo_root),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
+        app_path = repo_root / "mcp_implement" / "app" / "pore_editor.py"
+        _streamlit_proc, port, _streamlit_stderr_thread = _launch_streamlit_process(
+            app_path, address, preferred_port, _streamlit_stderr_tail
         )
-        if _streamlit_proc.stderr is not None:
-            global _streamlit_stderr_thread
-            _streamlit_stderr_thread = threading.Thread(
-                target=_read_streamlit_stderr,
-                args=(_streamlit_proc.stderr,),
-                daemon=True,
-            )
-            _streamlit_stderr_thread.start()
+        _streamlit_port = port
+        _streamlit_started_at = time.time()
 
         # Health check: connect to the bound port.
-        check_host = "127.0.0.1" if address == "0.0.0.0" else ("::1" if address == "::" else address)
-        if _wait_for_port(check_host, port):
-            return {"status": "started", "pid": _streamlit_proc.pid, "url": url}
+        check_host = _healthcheck_host(address)
+        if _wait_for_port(check_host, port, stderr_tail=_streamlit_stderr_tail):
+            url = f"http://{display_host}:{port}"
+            return {"status": "started", "pid": _streamlit_proc.pid, "url": url, "port": port}
 
         # Health check failed; see if process exited.
         if _streamlit_proc.poll() is not None:
             return {
                 "error": "streamlit exited during startup",
                 "stderr_tail": list(_streamlit_stderr_tail),
+                "port": port,
             }
         return {
             "error": "streamlit did not become reachable before timeout",
             "stderr_tail": list(_streamlit_stderr_tail),
+            "port": port,
         }
     except Exception as exc:
         print(f"[launch_streamlit_app] {exc}", file=sys.stderr)
         return {"error": str(exc)}
+
+
+@server.tool(name="upload_lammps_file")
+def upload_lammps_file(
+    filename: str,
+    content: Optional[str] = None,
+    content_b64: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Upload a .lammps file into the custom_lammps directory used by pore_editor_v2.py."""
+    try:
+        fname = validate_filename(filename)
+        if not fname.lower().endswith(".lammps"):
+            raise ValueError("Only .lammps files are accepted")
+        repo_root = Path(__file__).resolve().parents[1]
+        pore_dir = repo_root / "mcp_implement" / "custom_lammps"
+        pore_dir.mkdir(parents=True, exist_ok=True)
+        if content_b64 is not None:
+            data = base64.b64decode(content_b64)
+        elif content is not None:
+            data = content.encode("utf-8")
+        else:
+            raise ValueError("Provide content or content_b64")
+        path = safe_join(str(pore_dir), fname)
+        with open(path, "wb") as f:
+            f.write(data)
+        return {"status": "ok", "path": path, "filename": fname, "bytes": len(data)}
+    except Exception as exc:
+        print(f"[upload_lammps_file] {exc}", file=sys.stderr)
+        return {"error": str(exc)}
+
+
+@server.tool(name="launch_streamlit_v2_app")
+def launch_streamlit_v2_app() -> Dict[str, Any]:
+    """Launch the Streamlit pore editor v2 app."""
+    global _streamlit_v2_proc, _streamlit_v2_port, _streamlit_v2_stderr_thread, _streamlit_v2_started_at
+    try:
+        preferred_port = int(os.getenv("STREAMLIT_SERVER_PORT", "8501"))
+        address = os.getenv("STREAMLIT_SERVER_ADDRESS", "localhost")
+        display_host = _display_host(address)
+
+        if _streamlit_v2_proc and _streamlit_v2_proc.poll() is None:
+            port = _streamlit_v2_port or preferred_port
+            url = f"http://{display_host}:{port}"
+            return {"status": "already_running", "pid": _streamlit_v2_proc.pid, "url": url, "port": port}
+
+        repo_root = Path(__file__).resolve().parents[1]
+        app_path = repo_root / "mcp_implement" / "ui" / "pore_editor_v2.py"
+        _streamlit_v2_proc, port, _streamlit_v2_stderr_thread = _launch_streamlit_process(
+            app_path, address, preferred_port, _streamlit_v2_stderr_tail
+        )
+        _streamlit_v2_port = port
+        _streamlit_v2_started_at = time.time()
+
+        check_host = _healthcheck_host(address)
+        if _wait_for_port(check_host, port, stderr_tail=_streamlit_v2_stderr_tail):
+            url = f"http://{display_host}:{port}"
+            return {"status": "started", "pid": _streamlit_v2_proc.pid, "url": url, "port": port}
+
+        if _streamlit_v2_proc.poll() is not None:
+            return {
+                "error": "streamlit exited during startup",
+                "stderr_tail": list(_streamlit_v2_stderr_tail),
+                "port": port,
+            }
+        return {
+            "error": "streamlit did not become reachable before timeout",
+            "stderr_tail": list(_streamlit_v2_stderr_tail),
+            "port": port,
+        }
+    except Exception as exc:
+        print(f"[launch_streamlit_v2_app] {exc}", file=sys.stderr)
+        return {"error": str(exc)}
+
+
+@server.tool(name="get_streamlit_v2_status")
+def get_streamlit_v2_status() -> Dict[str, Any]:
+    """Return current status for the v2 Streamlit app."""
+    address = os.getenv("STREAMLIT_SERVER_ADDRESS", "localhost")
+    display_host = _display_host(address)
+    alive = _streamlit_v2_proc is not None and _streamlit_v2_proc.poll() is None
+    port = _streamlit_v2_port
+    url = f"http://{display_host}:{port}" if port else None
+    started_at = _streamlit_v2_started_at
+    uptime_s = (time.time() - started_at) if started_at else None
+    return {
+        "status": "running" if alive else "stopped",
+        "pid": _streamlit_v2_proc.pid if alive else None,
+        "port": port,
+        "url": url,
+        "started_at": started_at,
+        "uptime_s": uptime_s,
+        "stderr_tail": list(_streamlit_v2_stderr_tail),
+    }
+
+
+@server.tool(name="restart_streamlit_v2_app")
+def restart_streamlit_v2_app() -> Dict[str, Any]:
+    """Restart the v2 Streamlit app."""
+    global _streamlit_v2_proc
+    if _streamlit_v2_proc and _streamlit_v2_proc.poll() is None:
+        _streamlit_v2_proc.terminate()
+        try:
+            _streamlit_v2_proc.wait(timeout=5)
+        except Exception:
+            _streamlit_v2_proc.kill()
+            _streamlit_v2_proc.wait(timeout=2)
+    _streamlit_v2_proc = None
+    return launch_streamlit_v2_app()
 
 
 @server.tool(name="get_last_export_paths")
